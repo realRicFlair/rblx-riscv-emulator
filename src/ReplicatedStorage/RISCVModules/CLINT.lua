@@ -1,3 +1,4 @@
+--!strict
 --[[
 	CLINT.lua - Core Local Interruptor (Timer + Software Interrupts)
 	

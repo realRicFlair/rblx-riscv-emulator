@@ -1,3 +1,4 @@
+
 --[[
 	CPU.lua - Main RISC-V CPU orchestrator (Linux-capable)
 	
@@ -230,7 +231,16 @@ function CPU:trap(cause, tval)
 	self.trapPending = true
 	
 	if self.onTrap then
+		print("[DEBUG] Decoding 0x800000D0 - 0x800000F0:")
+		for addr = 0x800000D0, 0x800000F0, 4 do
+		    local instr = self.mem:read32_phys(addr)
+		    local d = Decoder.decode(instr)
+		    print(string.format("  %08X: %08X  op=%02X f3=%d f7=%02X rd=x%d rs1=x%d rs2=x%d imm=%d",
+		        addr, instr, d.opcode, d.funct3, d.funct7, d.rd, d.rs1, d.rs2, d.imm))
+		end
+
 		self.onTrap(cause, tval, self.regs.pc)
+		
 	end
 end
 
@@ -424,6 +434,10 @@ function CPU:step()
 		end
 		return false
 	end
+
+	if self.instructionCount > (self.MAX_INSTRUCTIONS_TR - 25) then
+        print(string.format("Trace: PC = 0x%08X", self.regs.pc))
+    end
 	
 	return true
 end

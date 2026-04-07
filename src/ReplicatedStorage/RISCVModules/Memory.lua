@@ -1,3 +1,4 @@
+--!strict
 --[[
 	Memory.lua - Byte-addressable memory with MMU and Memory-Mapped I/O
 	

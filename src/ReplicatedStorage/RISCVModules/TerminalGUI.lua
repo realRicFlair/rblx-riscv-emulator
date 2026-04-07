@@ -14,6 +14,7 @@
 local TerminalGUI = {}
 TerminalGUI.__index = TerminalGUI
 
+
 -- Terminal dimensions
 local TERMINAL_CONFIG = {
 	width = 800,
@@ -24,7 +25,7 @@ local TERMINAL_CONFIG = {
 	fontFace = Font.fromEnum(Enum.Font.RobotoMono),
 	fontSize = 14,
 	maxLines = 500,     -- scrollback buffer
-	title = "RISC-V Terminal",
+	title = "RoroCorp Terminal",
 }
 
 function TerminalGUI.create(playerGui)
@@ -85,6 +86,7 @@ function TerminalGUI.create(playerGui)
 	titleLabel.Parent = titleBar
 	
 	-- Window dots
+--[[
 	for i, color in ipairs({Color3.fromRGB(255,95,86), Color3.fromRGB(255,189,46), Color3.fromRGB(39,201,63)}) do
 		local dot = Instance.new("Frame")
 		dot.Size = UDim2.fromOffset(12, 12)
@@ -96,7 +98,7 @@ function TerminalGUI.create(playerGui)
 		dc.CornerRadius = UDim.new(1, 0)
 		dc.Parent = dot
 	end
-	
+]]	
 	-- Terminal output area (scrolling)
 	local outputFrame = Instance.new("ScrollingFrame")
 	outputFrame.Name = "OutputFrame"
@@ -104,11 +106,15 @@ function TerminalGUI.create(playerGui)
 	outputFrame.Position = UDim2.new(0, 5, 0, 32)
 	outputFrame.BackgroundColor3 = TERMINAL_CONFIG.bgColor
 	outputFrame.BorderSizePixel = 0
+	outputFrame.ScrollingEnabled = true
 	outputFrame.ScrollBarThickness = 6
 	outputFrame.ScrollBarImageColor3 = Color3.fromRGB(80, 80, 80)
 	outputFrame.CanvasSize = UDim2.new(0, 0, 0, 0)
 	outputFrame.AutomaticCanvasSize = Enum.AutomaticSize.Y
 	outputFrame.Parent = mainFrame
+
+
+
 	
 	local outputLayout = Instance.new("UIListLayout")
 	outputLayout.SortOrder = Enum.SortOrder.LayoutOrder
@@ -147,7 +153,7 @@ function TerminalGUI.create(playerGui)
 	inputBox.Position = UDim2.new(0, 22, 0, 0)
 	inputBox.BackgroundTransparency = 1
 	inputBox.Text = ""
-	inputBox.PlaceholderText = "Type here..."
+	inputBox.PlaceholderText = "Type Here . . ."
 	inputBox.PlaceholderColor3 = Color3.fromRGB(0, 100, 30)
 	inputBox.TextColor3 = TERMINAL_CONFIG.fgColor
 	inputBox.FontFace = TERMINAL_CONFIG.fontFace
@@ -247,9 +253,13 @@ function TerminalGUI:_pushLine(text)
 	end
 	
 	-- Auto-scroll to bottom
-	task.defer(function()
-		self.outputFrame.CanvasPosition = Vector2.new(0, math.huge)
-	end)
+	--task.defer(function()
+	--	self.outputFrame.CanvasPosition = Vector2.new(0, math.huge)
+	--end)
+	--self.outputFrame.UIListLayout:GetPropertyChangedSignal("AbsoluteContentSize"):Wait()
+
+	-- Scroll to bottom
+	self.outputFrame.CanvasPosition = Vector2.new(0, self.outputFrame.AbsoluteCanvasSize.Y)
 end
 
 function TerminalGUI:_updateCurrentLine()

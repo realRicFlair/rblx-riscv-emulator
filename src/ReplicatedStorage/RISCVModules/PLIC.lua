@@ -1,5 +1,7 @@
+
+
 --[[
-	PLIC.lua - Platform-Level Interrupt Controller
+	PLIC.lua - Platform-Level Interrupt Controller (FIXED byte-level MMIO)
 	
 	Place in: ReplicatedStorage/RISCVModules/PLIC
 	
@@ -27,14 +29,14 @@
 		-- Each CPU step, check:
 		plic:updateInterrupts(cpu)
 ]]
-
+ 
 local PLIC = {}
 PLIC.__index = PLIC
-
+ 
 local BASE_ADDR = 0x0C000000
 local NUM_SOURCES = 64       -- support up to 64 interrupt sources
 local NUM_CONTEXTS = 2       -- context 0 = M-mode, context 1 = S-mode
-
+ 
 function PLIC.new()
 	local self = setmetatable({}, PLIC)
 	
@@ -65,79 +67,52 @@ function PLIC.new()
 		end
 	end
 	
+	-- Cache for claim register reads (to avoid triggering side-effect 4 times
+	-- when Memory does 4 byte reads for one 32-bit access)
+	self._lastClaimAddr = nil   -- word offset of last claim
+	self._lastClaimValue = 0    -- cached claim result
+	
 	-- Build MMIO read/write functions (closures capturing self)
+	-- FIX: Memory module calls these per-BYTE, so we must handle byte-level access
+	-- just like CLINT does, not word-level.
 	local s = self
-	self.readFn = function(offset) return s:read32(offset) end
-	self.writeFn = function(offset, val) s:write32(offset, val) end
+	self.readFn = function(offset) return s:readByte(offset) end
+	self.writeFn = function(offset, val) s:writeByte(offset, val) end
 	
 	return self
 end
-
+ 
 --------------------------------------------------------------------------------
--- INTERRUPT MANAGEMENT
+-- BYTE-LEVEL ACCESS (Memory module calls read8/write8 per byte)
+-- FIX: Added byte-level handlers matching the CLINT pattern.
+-- The Memory module calls the MMIO read/write functions once per byte,
+-- so we must extract the correct byte from the 32-bit register value.
 --------------------------------------------------------------------------------
-
--- A device calls this to signal an interrupt
-function PLIC:raiseInterrupt(source)
-	if source > 0 and source <= NUM_SOURCES then
-		self.pending[source] = true
-	end
+ 
+function PLIC:readByte(offset)
+	local wordOffset = bit32.band(offset, 0xFFFFFFFC) -- align to 4
+	local byteIdx = offset - wordOffset               -- 0, 1, 2, or 3
+	local word = self:_readWord(wordOffset)
+	return bit32.band(bit32.rshift(word, byteIdx * 8), 0xFF)
 end
-
--- Clear a pending interrupt
-function PLIC:clearInterrupt(source)
-	if source > 0 and source <= NUM_SOURCES then
-		self.pending[source] = false
-	end
+ 
+function PLIC:writeByte(offset, val)
+	local wordOffset = bit32.band(offset, 0xFFFFFFFC)
+	local byteIdx = offset - wordOffset
+	
+	-- Read-modify-write
+	local word = self:_readWord(wordOffset)
+	local mask = bit32.bnot(bit32.lshift(0xFF, byteIdx * 8))
+	word = bit32.band(word, mask)
+	word = bit32.bor(word, bit32.lshift(bit32.band(val, 0xFF), byteIdx * 8))
+	self:_writeWord(wordOffset, word)
 end
-
--- Find highest-priority pending+enabled source for a context
-function PLIC:_bestCandidate(ctx)
-	local bestSource = 0
-	local bestPriority = 0
-	local context = self.contexts[ctx]
-	if not context then return 0 end
-	
-	for src = 1, NUM_SOURCES do
-		if self.pending[src] and context.enable[src] then
-			local pri = self.priority[src] or 0
-			if pri > context.threshold and pri > bestPriority then
-				bestPriority = pri
-				bestSource = src
-			end
-		end
-	end
-	return bestSource
-end
-
--- Call each CPU step to update external interrupt pending bits
-function PLIC:updateInterrupts(cpu)
-	-- Context 0 -> MEIP (Machine External Interrupt Pending) in mip, bit 11
-	-- Context 1 -> SEIP (Supervisor External Interrupt Pending) in mip, bit 9
-	local mip = cpu.regs:readCSR(0x344)
-	
-	local mCandidate = self:_bestCandidate(0)
-	if mCandidate > 0 then
-		mip = bit32.bor(mip, bit32.lshift(1, 11)) -- set MEIP
-	else
-		mip = bit32.band(mip, bit32.bnot(bit32.lshift(1, 11))) -- clear MEIP
-	end
-	
-	local sCandidate = self:_bestCandidate(1)
-	if sCandidate > 0 then
-		mip = bit32.bor(mip, bit32.lshift(1, 9)) -- set SEIP
-	else
-		mip = bit32.band(mip, bit32.bnot(bit32.lshift(1, 9))) -- clear SEIP
-	end
-	
-	cpu.regs:writeCSR(0x344, mip)
-end
-
+ 
 --------------------------------------------------------------------------------
--- MMIO READ
+-- WORD-LEVEL ACCESS (internal, called by byte handlers)
 --------------------------------------------------------------------------------
-
-function PLIC:read32(offset)
+ 
+function PLIC:_readWord(offset)
 	-- Source priority: 0x000000 - 0x000FFC
 	if offset >= 0x000000 and offset < 0x001000 then
 		local source = math.floor(offset / 4)
@@ -148,10 +123,10 @@ function PLIC:read32(offset)
 	if offset >= 0x001000 and offset < 0x001080 then
 		local wordIdx = math.floor((offset - 0x001000) / 4)
 		local val = 0
-		for bit = 0, 31 do
-			local src = wordIdx * 32 + bit
+		for b = 0, 31 do
+			local src = wordIdx * 32 + b
 			if self.pending[src] then
-				val = bit32.bor(val, bit32.lshift(1, bit))
+				val = bit32.bor(val, bit32.lshift(1, b))
 			end
 		end
 		return val
@@ -166,10 +141,10 @@ function PLIC:read32(offset)
 		local context = self.contexts[ctx]
 		if not context then return 0 end
 		local val = 0
-		for bit = 0, 31 do
-			local src = wordIdx * 32 + bit
+		for b = 0, 31 do
+			local src = wordIdx * 32 + b
 			if context.enable[src] then
-				val = bit32.bor(val, bit32.lshift(1, bit))
+				val = bit32.bor(val, bit32.lshift(1, b))
 			end
 		end
 		return val
@@ -184,27 +159,32 @@ function PLIC:read32(offset)
 		if not context then return 0 end
 		
 		if reg == 0 then
-			-- Threshold
 			return context.threshold
 		elseif reg == 4 then
-			-- Claim: returns highest priority pending source and marks it claimed
+			-- Claim: returns highest priority pending source and marks it claimed.
+			-- FIX: Cache the claim result so that when Memory reads 4 bytes of this
+			-- register, the side-effect (clearing pending) only happens once.
+			local claimKey = offset  -- word-aligned offset for this claim register
+			if self._lastClaimAddr == claimKey then
+				-- Return cached value (bytes 1-3 of same 32-bit read)
+				return self._lastClaimValue
+			end
+			-- First byte of a new claim read: perform the actual claim
 			local best = self:_bestCandidate(ctx)
 			if best > 0 then
 				self.pending[best] = false
 				context.claimed = best
 			end
+			self._lastClaimAddr = claimKey
+			self._lastClaimValue = best
 			return best
 		end
 	end
 	
 	return 0
 end
-
---------------------------------------------------------------------------------
--- MMIO WRITE
---------------------------------------------------------------------------------
-
-function PLIC:write32(offset, val)
+ 
+function PLIC:_writeWord(offset, val)
 	-- Source priority
 	if offset >= 0x000000 and offset < 0x001000 then
 		local source = math.floor(offset / 4)
@@ -245,14 +225,67 @@ function PLIC:write32(offset, val)
 		if not context then return end
 		
 		if reg == 0 then
-			-- Threshold
 			context.threshold = bit32.band(val, 0x07)
 		elseif reg == 4 then
 			-- Complete: signals that handling of source `val` is done
 			context.claimed = 0
-			-- (interrupt can be re-raised by the device if still active)
+			self._lastClaimAddr = nil  -- invalidate claim cache
 		end
 	end
 end
-
+ 
+--------------------------------------------------------------------------------
+-- INTERRUPT MANAGEMENT
+--------------------------------------------------------------------------------
+ 
+function PLIC:raiseInterrupt(source)
+	if source > 0 and source <= NUM_SOURCES then
+		self.pending[source] = true
+	end
+end
+ 
+function PLIC:clearInterrupt(source)
+	if source > 0 and source <= NUM_SOURCES then
+		self.pending[source] = false
+	end
+end
+ 
+function PLIC:_bestCandidate(ctx)
+	local bestSource = 0
+	local bestPriority = 0
+	local context = self.contexts[ctx]
+	if not context then return 0 end
+	
+	for src = 1, NUM_SOURCES do
+		if self.pending[src] and context.enable[src] then
+			local pri = self.priority[src] or 0
+			if pri > context.threshold and pri > bestPriority then
+				bestPriority = pri
+				bestSource = src
+			end
+		end
+	end
+	return bestSource
+end
+ 
+function PLIC:updateInterrupts(cpu)
+	local mip = cpu.regs:readCSR(0x344)
+	
+	local mCandidate = self:_bestCandidate(0)
+	if mCandidate > 0 then
+		mip = bit32.bor(mip, bit32.lshift(1, 11))
+	else
+		mip = bit32.band(mip, bit32.bnot(bit32.lshift(1, 11)))
+	end
+	
+	local sCandidate = self:_bestCandidate(1)
+	if sCandidate > 0 then
+		mip = bit32.bor(mip, bit32.lshift(1, 9))
+	else
+		mip = bit32.band(mip, bit32.bnot(bit32.lshift(1, 9)))
+	end
+	
+	cpu.regs:writeCSR(0x344, mip)
+end
+ 
 return PLIC

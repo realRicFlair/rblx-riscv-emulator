@@ -1,3 +1,4 @@
+--!strict
 --[[
 	RV32I_ALU.lua - Integer ALU instructions
 	

@@ -1,3 +1,4 @@
+
 --[[
 	RV32I_Branch.lua - Conditional branch instructions
 	
@@ -10,7 +11,9 @@
 	      so the CPU loop knows not to advance PC by 4.
 ]]
 
-local function toU32(v) return v % 0x100000000 end
+local function toU32(v) 
+	return v % 0x100000000 
+end
 local function toI32(v)
 	v = v % 0x100000000
 	if v >= 0x80000000 then return v - 0x100000000 end
@@ -22,10 +25,19 @@ local module = {}
 module.name = "RV32I_Branch"
 module.description = "Conditional branches: BEQ, BNE, BLT, BGE, BLTU, BGEU"
 
+module.lastbrnchtrgt = 0
+
 local function branch(cpu, d, condition)
 	if condition then 
 		cpu.branchTarget = toU32(cpu.regs.pc + d.imm)
 		cpu.branchTaken = true
+	
+		--[[
+		if module.lastbrnchtrgt ~= cpu.branchTarget then
+			print("Branching to 0x" .. cpu.branchTarget .. " from 0x" .. cpu.regs.pc .. "")
+			module.lastbrnchtrgt = cpu.branchTarget
+		end
+		]]
 	end
 end
 

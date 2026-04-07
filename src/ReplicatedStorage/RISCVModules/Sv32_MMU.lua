@@ -1,3 +1,4 @@
+--!strict
 --[[
 	Sv32_MMU.lua - Sv32 Virtual Memory / Page Table Walker
 	

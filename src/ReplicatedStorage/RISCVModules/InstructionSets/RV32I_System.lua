@@ -17,9 +17,12 @@
 			CSRRSI (funct3=6) - CSR read/set bits immediate
 			CSRRCI (funct3=7) - CSR read/clear bits immediate
 	
-	TRAP HANDLING:
-		cpu:trap(cause, tval) is called for exceptions.
-		The CPU module provides this method.
+	FIX: CSR instructions now check if the CSR exists before accessing it.
+	If the CSR is unimplemented, an illegal instruction trap (cause 2) is
+	generated. This is critical because software like OpenSBI probes for
+	optional extensions by accessing their CSRs and catching the trap.
+	Without this, accessing an unknown CSR silently returns 0, which can
+	fool software into thinking an extension exists but isn't ready.
 ]]
 
 local function toU32(v) return v % 0x100000000 end
@@ -28,6 +31,19 @@ local module = {}
 
 module.name = "RV32I_System"
 module.description = "ECALL, EBREAK, MRET, SRET, WFI, and CSR instructions"
+
+--------------------------------------------------------------------------------
+-- CSR HELPER: validates CSR access, returns false + traps if invalid
+--------------------------------------------------------------------------------
+local function validateCSR(cpu, d)
+	local csrAddr = bit32.band(bit32.rshift(d.raw, 20), 0xFFF)
+	if not cpu.regs:isValidCSR(csrAddr) then
+		-- Unknown CSR → illegal instruction trap
+		cpu:trap(2, d.raw)
+		return false, csrAddr
+	end
+	return true, csrAddr
+end
 
 module.instructions = {
 	[0x73] = {
@@ -94,12 +110,17 @@ module.instructions = {
 			elseif imm == 0x105 then
 				-- WFI: wait for interrupt (treat as NOP for now)
 				-- In a real impl, this would sleep until an interrupt fires
+			else
+				-- Unknown system instruction → illegal instruction
+				cpu:trap(2, d.raw)
 			end
 		end,
 		
 		-- CSRRW (funct3 = 1)
 		[1] = function(cpu, d)
-			local csrAddr = bit32.band(bit32.rshift(d.raw, 20), 0xFFF)
+			local ok, csrAddr = validateCSR(cpu, d)
+			if not ok then return end
+			
 			local old = cpu.regs:readCSR(csrAddr)
 			cpu.regs:writeCSR(csrAddr, cpu.regs:read(d.rs1))
 			cpu.regs:write(d.rd, old)
@@ -107,7 +128,9 @@ module.instructions = {
 		
 		-- CSRRS (funct3 = 2)
 		[2] = function(cpu, d)
-			local csrAddr = bit32.band(bit32.rshift(d.raw, 20), 0xFFF)
+			local ok, csrAddr = validateCSR(cpu, d)
+			if not ok then return end
+			
 			local old = cpu.regs:readCSR(csrAddr)
 			if d.rs1 ~= 0 then
 				cpu.regs:writeCSR(csrAddr, bit32.bor(old, cpu.regs:read(d.rs1)))
@@ -117,7 +140,9 @@ module.instructions = {
 		
 		-- CSRRC (funct3 = 3)
 		[3] = function(cpu, d)
-			local csrAddr = bit32.band(bit32.rshift(d.raw, 20), 0xFFF)
+			local ok, csrAddr = validateCSR(cpu, d)
+			if not ok then return end
+			
 			local old = cpu.regs:readCSR(csrAddr)
 			if d.rs1 ~= 0 then
 				cpu.regs:writeCSR(csrAddr, bit32.band(old, bit32.bnot(cpu.regs:read(d.rs1))))
@@ -127,7 +152,9 @@ module.instructions = {
 		
 		-- CSRRWI (funct3 = 5)
 		[5] = function(cpu, d)
-			local csrAddr = bit32.band(bit32.rshift(d.raw, 20), 0xFFF)
+			local ok, csrAddr = validateCSR(cpu, d)
+			if not ok then return end
+			
 			local old = cpu.regs:readCSR(csrAddr)
 			cpu.regs:writeCSR(csrAddr, d.rs1) -- rs1 field is the zimm
 			cpu.regs:write(d.rd, old)
@@ -135,7 +162,9 @@ module.instructions = {
 		
 		-- CSRRSI (funct3 = 6)
 		[6] = function(cpu, d)
-			local csrAddr = bit32.band(bit32.rshift(d.raw, 20), 0xFFF)
+			local ok, csrAddr = validateCSR(cpu, d)
+			if not ok then return end
+			
 			local old = cpu.regs:readCSR(csrAddr)
 			if d.rs1 ~= 0 then
 				cpu.regs:writeCSR(csrAddr, bit32.bor(old, d.rs1))
@@ -145,7 +174,9 @@ module.instructions = {
 		
 		-- CSRRCI (funct3 = 7)
 		[7] = function(cpu, d)
-			local csrAddr = bit32.band(bit32.rshift(d.raw, 20), 0xFFF)
+			local ok, csrAddr = validateCSR(cpu, d)
+			if not ok then return end
+			
 			local old = cpu.regs:readCSR(csrAddr)
 			if d.rs1 ~= 0 then
 				cpu.regs:writeCSR(csrAddr, bit32.band(old, bit32.bnot(d.rs1)))

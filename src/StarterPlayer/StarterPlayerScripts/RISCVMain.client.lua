@@ -40,14 +40,14 @@ local player = Players.LocalPlayer
 --------------------------------------------------------------------------------
 
 local CONFIG = {
-	RAM_SIZE    = 16 * 1024 * 1024,  -- 16 MB
+	RAM_SIZE    = 32 * 1024 * 1024,  -- 512 MB
 	SBI_ADDR    = 0x80000000,        -- SBI firmware load address
-	KERNEL_ADDR = 0x80200000,        -- Kernel load address (2 MB offset)
-	DTB_ADDR    = 0x87000000,        -- Device tree blob address
+    KERNEL_ADDR = 0x80400000,   -- was 0x80200000, must match FW_JUMP_ADDR
+    DTB_ADDR    = 0x82200000,   -- was 0x87000000, must match FW_JUMP_FDT_ADDR
 	
 	-- Execution limits
-	MAX_INSTRUCTIONS = 10000000,     -- 10M instructions before stopping
-	YIELD_EVERY      = 5000,         -- yield to Roblox every N instructions
+	MAX_INSTRUCTIONS = 50_000_000,     -- 50M instructions before stopping
+	YIELD_EVERY      = 9000,         -- yield to Roblox every N instructions
 	
 	-- Set to true to see every instruction traced
 	DEBUG = false,
@@ -79,6 +79,7 @@ local function boot()
 		entryPoint = CONFIG.SBI_ADDR,
 		ramSize = CONFIG.RAM_SIZE,
 	})
+	cpu.MAX_INSTRUCTIONS_TR = CONFIG.MAX_INSTRUCTIONS
 	
 	-- Create terminal
 	local terminal = TerminalGUI.create(player:WaitForChild("PlayerGui"))
@@ -219,6 +220,17 @@ local function boot()
 	task.spawn(function()
 		terminal:writeLine("[BOOT] Starting CPU...")
 		terminal:writeLine("")
+
+		-- Decode the loop instructions
+		local Decoder = require(modules:WaitForChild("Decoder"))
+		terminal:writeLine("[DEBUG] Decoding 0x800000D0 - 0x800000F0:")
+		for addr = 0x800000D0, 0x800000F0, 4 do
+		    local instr = cpu.mem:read32_phys(addr)
+		    local d = Decoder.decode(instr)
+		    terminal:writeLine(string.format("  %08X: %08X  op=%02X f3=%d f7=%02X rd=x%d rs1=x%d rs2=x%d imm=%d",
+		        addr, instr, d.opcode, d.funct3, d.funct7, d.rd, d.rs1, d.rs2, d.imm))
+		end
+
 		cpu:run(CONFIG.MAX_INSTRUCTIONS, CONFIG.YIELD_EVERY)
 	
 		

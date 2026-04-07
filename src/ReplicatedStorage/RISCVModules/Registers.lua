@@ -7,6 +7,11 @@
 	All values are unsigned 32-bit internally.
 	
 	CSRs include Machine + Supervisor level registers needed for Linux.
+	
+	FIX: Unknown/unimplemented CSRs now return nil from readCSR/writeCSR,
+	allowing the CPU to generate an illegal instruction trap. This is critical
+	because software (like OpenSBI) probes for optional extensions by trying
+	to access their CSRs and catching the resulting trap.
 ]]
 
 local Registers = {}
@@ -41,6 +46,8 @@ function Registers.new()
 	
 	-- CSR storage
 	self.csr = {}
+	-- Set of valid CSR addresses (FIX: used to detect unknown CSRs)
+	self.validCSRs = {}
 	self:_initCSRs()
 	
 	-- Privilege level: 0=User, 1=Supervisor, 3=Machine
@@ -68,55 +75,77 @@ end
 --------------------------------------------------------------------------------
 
 function Registers:_initCSRs()
+	-- Helper: register a CSR as valid with an initial value
+	local function defCSR(addr, val)
+		self.csr[addr] = val or 0
+		self.validCSRs[addr] = true
+	end
+	
 	-- Machine-level CSRs
-	self.csr[0x300] = 0          -- mstatus
+	defCSR(0x300, 0)          -- mstatus
 	-- misa: MXL=1 (32-bit), extensions: I(8) M(12) A(0) S(18) U(20)
-	self.csr[0x301] = 0x40141101 -- rv32imasu
-	self.csr[0x302] = 0          -- medeleg
-	self.csr[0x303] = 0          -- mideleg
-	self.csr[0x304] = 0          -- mie
-	self.csr[0x305] = 0          -- mtvec
-	self.csr[0x306] = 0          -- mcounteren
-	self.csr[0x310] = 0          -- mstatush (rv32 only)
-	self.csr[0x340] = 0          -- mscratch
-	self.csr[0x341] = 0          -- mepc
-	self.csr[0x342] = 0          -- mcause
-	self.csr[0x343] = 0          -- mtval
-	self.csr[0x344] = 0          -- mip
+	defCSR(0x301, 0x40141101) -- rv32imasu
+	defCSR(0x302, 0)          -- medeleg
+	defCSR(0x303, 0)          -- mideleg
+	defCSR(0x304, 0)          -- mie
+	defCSR(0x305, 0)          -- mtvec
+	defCSR(0x306, 0)          -- mcounteren
+	defCSR(0x310, 0)          -- mstatush (rv32 only)
+	defCSR(0x340, 0)          -- mscratch
+	defCSR(0x341, 0)          -- mepc
+	defCSR(0x342, 0)          -- mcause
+	defCSR(0x343, 0)          -- mtval
+	defCSR(0x344, 0)          -- mip
 	
 	-- Physical Memory Protection (stubs - Linux checks for them)
 	for i = 0, 3 do
-		self.csr[0x3A0 + i] = 0  -- pmpcfg0-3
+		defCSR(0x3A0 + i, 0)  -- pmpcfg0-3
 	end
 	for i = 0, 15 do
-		self.csr[0x3B0 + i] = 0  -- pmpaddr0-15
+		defCSR(0x3B0 + i, 0)  -- pmpaddr0-15
 	end
 	
 	-- Machine info
-	self.csr[0xF11] = 0          -- mvendorid
-	self.csr[0xF12] = 0          -- marchid
-	self.csr[0xF13] = 0          -- mimpid
-	self.csr[0xF14] = 0          -- mhartid
+	defCSR(0xF11, 0)          -- mvendorid
+	defCSR(0xF12, 0)          -- marchid
+	defCSR(0xF13, 0)          -- mimpid
+	defCSR(0xF14, 0)          -- mhartid
+	defCSR(0xF15, 0)          -- mconfigptr (pointer to config structure, 0 = none)
 	
 	-- Supervisor-level CSRs
-	self.csr[0x100] = 0          -- sstatus (view of mstatus)
-	self.csr[0x104] = 0          -- sie (view of mie)
-	self.csr[0x105] = 0          -- stvec
-	self.csr[0x106] = 0          -- scounteren
-	self.csr[0x140] = 0          -- sscratch
-	self.csr[0x141] = 0          -- sepc
-	self.csr[0x142] = 0          -- scause
-	self.csr[0x143] = 0          -- stval
-	self.csr[0x144] = 0          -- sip (view of mip)
-	self.csr[0x180] = 0          -- satp
+	defCSR(0x100, 0)          -- sstatus (view of mstatus)
+	defCSR(0x104, 0)          -- sie (view of mie)
+	defCSR(0x105, 0)          -- stvec
+	defCSR(0x106, 0)          -- scounteren
+	defCSR(0x140, 0)          -- sscratch
+	defCSR(0x141, 0)          -- sepc
+	defCSR(0x142, 0)          -- scause
+	defCSR(0x143, 0)          -- stval
+	defCSR(0x144, 0)          -- sip (view of mip)
+	defCSR(0x180, 0)          -- satp
 	
-	-- Counters
-	self.csr[0xC00] = 0          -- cycle
-	self.csr[0xC01] = 0          -- time
-	self.csr[0xC02] = 0          -- instret
-	self.csr[0xC80] = 0          -- cycleh
-	self.csr[0xC81] = 0          -- timeh
-	self.csr[0xC82] = 0          -- instreth
+	-- Counters (read-only aliases at 0xC0x, writable at 0xB0x)
+	defCSR(0xC00, 0)          -- cycle
+	defCSR(0xC01, 0)          -- time
+	defCSR(0xC02, 0)          -- instret
+	defCSR(0xC80, 0)          -- cycleh
+	defCSR(0xC81, 0)          -- timeh
+	defCSR(0xC82, 0)          -- instreth
+	
+	-- Machine counter aliases (writable)
+	defCSR(0xB00, 0)          -- mcycle
+	defCSR(0xB02, 0)          -- minstret
+	defCSR(0xB80, 0)          -- mcycleh
+	defCSR(0xB82, 0)          -- minstreth
+	
+	-- Machine counter inhibit
+	defCSR(0x320, 0)          -- mcountinhibit
+end
+
+-- Check if a CSR address is valid/implemented
+function Registers:isValidCSR(addr)
+	addr = bit32.band(addr, 0xFFF)
+	return self.validCSRs[addr] == true
 end
 
 -- Masks for sstatus bits visible from mstatus
@@ -156,6 +185,11 @@ function Registers:readCSR(addr)
 	if addr == 0xB80 then return self.csr[0xC80] or 0 end -- mcycleh
 	if addr == 0xB82 then return self.csr[0xC82] or 0 end -- minstreth
 	
+	-- FIX: Return nil for unimplemented CSRs so callers can trap
+	if not self.validCSRs[addr] then
+		return nil
+	end
+	
 	return self.csr[addr] or 0
 end
 
@@ -165,7 +199,12 @@ function Registers:writeCSR(addr, value)
 	
 	-- Read-only CSRs (top 2 bits of addr = 11)
 	if bit32.band(bit32.rshift(addr, 10), 3) == 3 then
-		return
+		return false  -- indicate read-only
+	end
+	
+	-- FIX: Reject writes to unimplemented CSRs
+	if not self.validCSRs[addr] then
+		return nil  -- signal invalid CSR
 	end
 	
 	-- sstatus writes through to mstatus (only S-mode bits)
@@ -174,7 +213,7 @@ function Registers:writeCSR(addr, value)
 		mstatus = bit32.band(mstatus, bit32.bnot(SSTATUS_READ_MASK))
 		mstatus = bit32.bor(mstatus, bit32.band(value, SSTATUS_READ_MASK))
 		self.csr[0x300] = mstatus
-		return
+		return true
 	end
 	
 	-- sie writes through to mie (S-mode interrupt bits only)
@@ -183,7 +222,7 @@ function Registers:writeCSR(addr, value)
 		mie = bit32.band(mie, bit32.bnot(0x222))
 		mie = bit32.bor(mie, bit32.band(value, 0x222))
 		self.csr[0x304] = mie
-		return
+		return true
 	end
 	
 	-- sip writes through to mip (only SSIP is writable by software)
@@ -192,27 +231,23 @@ function Registers:writeCSR(addr, value)
 		mip = bit32.band(mip, bit32.bnot(0x002)) -- clear SSIP
 		mip = bit32.bor(mip, bit32.band(value, 0x002)) -- set new SSIP
 		self.csr[0x344] = mip
-		return
+		return true
 	end
 	
 	-- mip: some bits are read-only (set by hardware)
-	-- Software can only write SSIP (bit 1), STIP (bit 5), SEIP (bit 9)
-	-- MTIP (7), MSIP (3), MEIP (11) are set by CLINT/PLIC
 	if addr == 0x344 then
-		-- Allow all writes for now since CLINT/PLIC set the hardware bits directly
 		self.csr[0x344] = value
-		return
+		return true
 	end
 	
-	-- satp: when written, TLB should be flushed (handled by CPU via SFENCE.VMA)
-	
 	-- Counter writes (mcycle, minstret)
-	if addr == 0xB00 then self.csr[0xC00] = value; return end
-	if addr == 0xB02 then self.csr[0xC02] = value; return end
-	if addr == 0xB80 then self.csr[0xC80] = value; return end
-	if addr == 0xB82 then self.csr[0xC82] = value; return end
+	if addr == 0xB00 then self.csr[0xC00] = value; return true end
+	if addr == 0xB02 then self.csr[0xC02] = value; return true end
+	if addr == 0xB80 then self.csr[0xC80] = value; return true end
+	if addr == 0xB82 then self.csr[0xC82] = value; return true end
 	
 	self.csr[addr] = value
+	return true
 end
 
 function Registers:incrementInstret()

@@ -1,3 +1,4 @@
+--!strict
 --[[
 	RV32I_Mem.lua - Load and Store instructions
 	

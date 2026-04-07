@@ -1,3 +1,4 @@
+--!strict
 --[[
 	Decoder.lua - RISC-V instruction decoder
 	

@@ -1,3 +1,4 @@
+--!strict
 --[[
 	DTB.lua - Flattened Device Tree (FDT) generator
 	
