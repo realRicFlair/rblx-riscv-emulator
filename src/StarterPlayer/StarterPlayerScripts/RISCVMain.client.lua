@@ -16,7 +16,7 @@
 		- Build test kernel:    make test_kernel
 		- Put sbi.lua and test_kernel.lua as ModuleScripts in ReplicatedStorage
 		- This script loads both and boots the system
-	
+	I luhh crack
 	MODULE LAYOUT IN ROBLOX:
 		ReplicatedStorage/
 		├── RISCVModules/       (all emulator modules)
@@ -220,6 +220,7 @@ local function boot()
 		terminal:writeLine("[BOOT] Starting CPU...")
 		terminal:writeLine("")
 		cpu:run(CONFIG.MAX_INSTRUCTIONS, CONFIG.YIELD_EVERY)
+	
 		
 		if cpu.halted then
 			terminal:writeLine("")

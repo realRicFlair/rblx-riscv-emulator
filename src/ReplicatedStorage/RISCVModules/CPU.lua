@@ -19,6 +19,8 @@ local Sv32_MMU  = require(script.Parent.Sv32_MMU)
 local CLINTMod  = require(script.Parent.CLINT)
 local PLICMod   = require(script.Parent.PLIC)
 
+local RegistersType = require(script.Parent.Registers).Registers
+
 local CPU = {}
 CPU.__index = CPU
 

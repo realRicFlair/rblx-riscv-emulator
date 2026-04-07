@@ -12,6 +12,13 @@
 local Registers = {}
 Registers.__index = Registers
 
+export type Registers = typeof(setmetatable({} :: {
+	x: {[number]: number},
+	pc: number,
+	csr: {[number]: number},
+	privLevel: number,
+}, Registers))
+
 -- ABI register names for debug display
 Registers.ABI_NAMES = {
 	[0]="zero", "ra", "sp", "gp", "tp", "t0", "t1", "t2",

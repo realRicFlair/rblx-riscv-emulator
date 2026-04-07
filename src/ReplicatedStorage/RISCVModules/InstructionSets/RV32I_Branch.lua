@@ -23,7 +23,7 @@ module.name = "RV32I_Branch"
 module.description = "Conditional branches: BEQ, BNE, BLT, BGE, BLTU, BGEU"
 
 local function branch(cpu, d, condition)
-	if condition then
+	if condition then 
 		cpu.branchTarget = toU32(cpu.regs.pc + d.imm)
 		cpu.branchTaken = true
 	end
