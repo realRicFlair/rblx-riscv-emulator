@@ -28,6 +28,46 @@
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local Players = game:GetService("Players")
 
+--------------------------------------------------------------------------------
+-- HTTP KERNEL LOADER
+-- Pulls Image.bin from the server (which fetched it from PyServer) in chunks.
+-- Returns a raw binary string, or nil if unavailable.
+--------------------------------------------------------------------------------
+
+local function loadKernelFromHTTP(terminal)
+    local rfInfo  = ReplicatedStorage:FindFirstChild("KernelGetInfo")
+    local rfChunk = ReplicatedStorage:FindFirstChild("KernelGetChunk")
+    if not rfInfo or not rfChunk then
+        return nil  -- server-side RemoteFunctions not present yet
+    end
+
+    terminal:writeLine("[BOOT] Waiting for kernel server...")
+    local ready, chunkCount, _, errMsg = rfInfo:InvokeServer()
+
+    if not ready then
+        terminal:writeLine("[HTTP] Kernel server unavailable: " .. tostring(errMsg))
+        return nil
+    end
+
+    terminal:writeLine(string.format("[HTTP] Downloading kernel (%d chunks)...", chunkCount))
+
+    local parts = {}
+    for i = 1, chunkCount do
+        local chunk = rfChunk:InvokeServer(i)
+        if not chunk then
+            terminal:writeLine(string.format("[HTTP] Missing chunk %d — aborting", i))
+            return nil
+        end
+        parts[i] = chunk
+        if i % 10 == 0 or i == chunkCount then
+            terminal:writeLine(string.format("[HTTP] %d / %d chunks received...", i, chunkCount))
+        end
+    end
+
+    terminal:writeLine("[HTTP] Kernel download complete, assembling...")
+    return table.concat(parts)
+end
+
 local modules = ReplicatedStorage:WaitForChild("RISCVModules")
 local CPU = require(modules:WaitForChild("CPU"))
 local TerminalGUI = require(modules:WaitForChild("TerminalGUI"))
@@ -116,23 +156,33 @@ local function boot()
 		cpu:loadProgram(sbiModule.program, CONFIG.SBI_ADDR)
 		
 		---------- Step 2: Load Kernel ----------
-		
-		-- Try Linux kernel first, then test kernel
-		local kernelModule = tryRequire("LinuxKernel", 2)
-		local kernelName = "Linux"
-		
-		if not kernelModule or not kernelModule.program then
-			kernelModule = tryRequire("TestKernel", 3)
-			kernelName = "TestKernel"
-		end
-		
-		if kernelModule and kernelModule.program then
-			terminal:writeLine("[BOOT] Loading " .. kernelName .. " at 0x80200000...")
-			cpu.mem:loadWords(CONFIG.KERNEL_ADDR, kernelModule.program)
+
+		-- Priority 1: HTTP (Image.bin via Python server)
+		local httpKernel = loadKernelFromHTTP(terminal)
+		if httpKernel then
+			terminal:writeLine(string.format(
+				"[BOOT] Loading HTTP kernel (%d bytes) at 0x%08X...",
+				#httpKernel, CONFIG.KERNEL_ADDR))
+			cpu.mem:loadBinary(CONFIG.KERNEL_ADDR, httpKernel)
+
+		-- Priority 2: LinuxKernel ModuleScript
 		else
-			terminal:writeLine("[WARN] No kernel found! SBI will boot but has nothing to jump to.")
-			terminal:writeLine("  Build test: make test_kernel")
-			terminal:writeLine("  Put sbi/test_kernel.lua as ReplicatedStorage/TestKernel")
+			local kernelModule = tryRequire("LinuxKernel", 2)
+			local kernelName = "Linux"
+
+			if not kernelModule or not kernelModule.program then
+				kernelModule = tryRequire("TestKernel", 3)
+				kernelName = "TestKernel"
+			end
+
+			if kernelModule and kernelModule.program then
+				terminal:writeLine("[BOOT] Loading " .. kernelName .. " at 0x80200000...")
+				cpu.mem:loadWords(CONFIG.KERNEL_ADDR, kernelModule.program)
+			else
+				terminal:writeLine("[WARN] No kernel found! SBI will boot but has nothing to jump to.")
+				terminal:writeLine("  Option A: run PyServer/kernel_server.py with Image.bin")
+				terminal:writeLine("  Option B: make test_kernel -> ReplicatedStorage/TestKernel")
+			end
 		end
 		
 		---------- Step 3: Load DTB ----------

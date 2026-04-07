@@ -89,39 +89,52 @@ end
 
 function Memory:_registerUART()
 	local UART_BASE = 0x10000000
-	
+	local dlab = false  -- Divisor Latch Access Bit (LCR bit 7)
+	local dll  = 0x01  -- Divisor latch low  (stored but ignored)
+	local dlh  = 0x00  -- Divisor latch high (stored but ignored)
+
 	self:registerMMIO(UART_BASE, 0x100,
 		-- READ
 		function(offset)
 			if offset == 0 then
+				if dlab then return dll end
 				-- RBR: read next char from input buffer
 				if #self.uartInputBuffer > 0 then
 					return table.remove(self.uartInputBuffer, 1)
 				end
 				return 0
+			elseif offset == 1 then
+				if dlab then return dlh end
+				return 0  -- IER
+			elseif offset == 2 then
+				-- IIR: no interrupt pending
+				return 0x01
 			elseif offset == 5 then
-				-- LSR: line status register
-				local status = 0x60 -- bits 5,6 set = transmitter empty+idle
+				-- LSR: TX always empty/idle; set data-ready bit if input waiting
+				local status = 0x60
 				if #self.uartInputBuffer > 0 then
-					status = bit32.bor(status, 0x01) -- bit 0 = data ready
+					status = bit32.bor(status, 0x01)
 				end
 				return status
-			elseif offset == 2 then
-				-- IIR: interrupt identification register
-				-- Bit 0 = 1 means no interrupt pending
-				return 0x01
 			end
 			return 0
 		end,
 		-- WRITE
 		function(offset, val)
 			if offset == 0 then
-				-- THR: transmit character
-				if self.uartOutputCallback then
-					self.uartOutputCallback(val)
+				if dlab then
+					dll = val  -- divisor latch low: store, don't output
+				elseif self.uartOutputCallback then
+					self.uartOutputCallback(val)  -- THR: transmit character
 				end
+			elseif offset == 1 then
+				if dlab then dlh = val end  -- divisor latch high: store, don't output
+				-- else IER: silently ignore (no interrupt support)
+			elseif offset == 3 then
+				-- LCR: track DLAB bit only
+				dlab = bit32.btest(val, 0x80)
 			end
-			-- IER (1), FCR (2), LCR (3), MCR (4) silently ignored
+			-- FCR (2), MCR (4): silently ignored
 		end
 	)
 end
